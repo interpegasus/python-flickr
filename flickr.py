@@ -11,6 +11,10 @@ __version__ = '0.4.0'
 import urllib
 import requests
 from requests_oauthlib import OAuth1
+from xml.etree import cElementTree as ET
+from collections import defaultdict
+
+
 
 try:
     from urlparse import parse_qsl
@@ -77,10 +81,10 @@ class FlickrAPI(object):
         self.oauth_token = oauth_token
         self.oauth_token_secret = oauth_token_secret
 
-        self.api_base = 'http://api.flickr.com/services'
+        self.api_base = 'https://api.flickr.com/services'
         self.rest_api_url = '%s/rest' % self.api_base
-        self.upload_api_url = '%s/upload/' % self.api_base
-        self.replace_api_url = '%s/replace/' % self.api_base
+        self.upload_api_url = 'https://up.flickr.com/services/upload/'
+        self.replace_api_url = 'https://up.flickr.com/services/replace/'
 
         self.request_token_url = '%s/oauth/request_token' % self.api_base
         self.access_token_url = '%s/oauth/access_token' % self.api_base
@@ -95,7 +99,7 @@ class FlickrAPI(object):
 
         if self.api_key is not None and self.api_secret is not None and \
            self.oauth_token is None and self.oauth_token_secret is None:
-            self.auth = OAuth1(self.api_key, self.app_secret,
+            self.auth = OAuth1(self.api_key, self.api_secret,
                                signature_type='auth_header')
 
         if self.api_key is not None and self.api_secret is not None and \
@@ -156,7 +160,7 @@ class FlickrAPI(object):
 
         return dict(parse_qsl(response.content))
 
-    def request(self, endpoint, method='GET', params={}, files=None, replace=False):
+    def request(self, endpoint=None, method='GET', params={}, files=None, replace=False):
         #if endpoint is None and files is None:
         #   raise FlickrAPIError('Please supply an API endpoint to hit.')
 
@@ -164,13 +168,23 @@ class FlickrAPI(object):
         if not method in ('get', 'post'):
             raise FlickrAPIError('Method must be of GET or POST')
 
-        params = params or {}
-        params.update({
-            'format': 'json',
-            'nojsoncallback': 1,
-            'method': endpoint,
-            'api_key': self.api_key
-        })
+        if params is None:
+            params = {}
+
+        if endpoint:
+            params.update({
+                'format': 'json',
+                'nojsoncallback': 1,
+                'api_key': self.api_key,
+                'method': endpoint,
+            })
+        else:
+            params.update({
+                'format': 'json',
+                'nojsoncallback': 1,
+                'api_key': self.api_key,
+            })
+
         # requests doesn't like items that can't be converted to unicode,
         # so let's be nice and do that for the user
         for k, v in params.items():
@@ -181,23 +195,28 @@ class FlickrAPI(object):
             url = self.rest_api_url
         else:
             url = self.replace_api_url if replace else self.upload_api_url
-
         func = getattr(self.client, method)
         if method == 'get':
             response = func(url, params=params)
         else:
-            response = func(url, data=params, files=files)
-
-        print response.content
-        content = response.content.decode('utf-8')
+            if files:
+                photo_files = {'photo': ('image.jpg',files)}
+                response = func(url, params=params, files=photo_files)
+            else:
+                response = func(url, data=params)
+        content = response.content
         try:
             try:
                 content = content.json()
             except AttributeError:
-                content = json.loads(response.content)
+                content = json.loads(content)
         except ValueError:
-            content = {}
-
+            try:
+                from lxml import etree
+                root = etree.fromstring(str(content))
+                content = {'photo_id':root[0].text}
+            except:
+                print content
         return content
 
     def get(self, endpoint, params=None):
